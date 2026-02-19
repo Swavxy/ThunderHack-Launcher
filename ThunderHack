@@ -1,14 +1,17 @@
-# ThunderHack Auto-Launcher - Installs Java 21 if needed + Downloads & Runs JAR
-# Fixed version 2026 - run as Administrator
+# ThunderHack Auto-Launcher - Installs Java 21 (Microsoft OpenJDK) if needed + Runs JAR
+# 2025–2026 compatible version - run as Administrator
 
-if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]"Administrator")) {
+# Self-elevate
+if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Start-Process powershell.exe "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
     exit
 }
 
-Write-Host "Starting ThunderHack launcher..." -ForegroundColor Cyan
+Clear-Host
+Write-Host "ThunderHack Launcher" -ForegroundColor Cyan
+Write-Host "==============================" -ForegroundColor DarkCyan
 
-# Java 21 search/install
+# Java 21 detection / install
 $jdkSearch = "C:\Program Files\Microsoft\jdk-21*"
 $javaExe = $null
 
@@ -16,64 +19,74 @@ $jdkFolder = Get-ChildItem -Path $jdkSearch -Directory -ErrorAction SilentlyCont
              Sort-Object LastWriteTime -Descending |
              Select-Object -First 1
 
-if ($jdkFolder -and (Test-Path (Join-Path $jdkFolder.FullName "bin\java.exe"))) {
-    $javaExe = Join-Path $jdkFolder.FullName "bin\java.exe"
-    Write-Host "Java 21 already installed" -ForegroundColor Green
+if ($jdkFolder -and (Test-Path "$($jdkFolder.FullName)\bin\java.exe")) {
+    $javaExe = "$($jdkFolder.FullName)\bin\java.exe"
+    Write-Host "Java 21 already installed → $($jdkFolder.Name)" -ForegroundColor Green
 } else {
     Write-Host "Installing Microsoft OpenJDK 21..." -ForegroundColor Yellow
     try {
         $api = "https://api.github.com/repos/microsoft/openjdk/releases/latest"
-        $rel = Invoke-RestMethod -Uri $api -UseBasicParsing -Headers @{"User-Agent"="PowerShell"}
+        $release = Invoke-RestMethod -Uri $api -UseBasicParsing -Headers @{"User-Agent"="PowerShell"}
 
-        # Updated pattern - matches current naming (e.g. OpenJDK21U-jdk_x64_windows_hotspot_21.0.2_13.msi)
-        $msi = $rel.assets | Where-Object { $_.name -match "OpenJDK21U-jdk_x64_windows_hotspot_.*\.msi" } | Select-Object -First 1
+        $msi = $release.assets |
+               Where-Object { $_.name -match "OpenJDK21U-jdk_x64_windows_hotspot_.*\.msi" } |
+               Select-Object -First 1
 
-        if (-not $msi) {
-            Write-Host "No Java 21 MSI found in latest release" -ForegroundColor Red
-            pause
-            exit 1
-        }
+        if (-not $msi) { throw "No Java 21 MSI found" }
 
         $url = $msi.browser_download_url
-        $tmp = "$env:TEMP\jdk21.msi"
+        $msiTemp = "$env:TEMP\jdk21.msi"
 
-        Write-Host "Downloading..." -ForegroundColor Yellow
-        Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing
+        Write-Host "Downloading installer..." -ForegroundColor Yellow
+        Invoke-WebRequest -Uri $url -OutFile $msiTemp -UseBasicParsing
 
         Write-Host "Installing silently..." -ForegroundColor Yellow
-        Start-Process msiexec.exe -ArgumentList "/i `"$tmp`" /quiet /norestart ADDLOCAL=FeatureEnvironment,FeatureJarFileRunWith,FeatureJavaHome" -Wait -NoNewWindow
+        Start-Process msiexec.exe -ArgumentList "/i `"$msiTemp`" /quiet /norestart ADDLOCAL=FeatureEnvironment,FeatureJarFileRunWith,FeatureJavaHome" -Wait -NoNewWindow
 
-        Remove-Item $tmp -Force -EA SilentlyContinue
+        Remove-Item $msiTemp -Force -ErrorAction SilentlyContinue
 
         $jdkFolder = Get-ChildItem -Path $jdkSearch -Directory -ErrorAction SilentlyContinue |
                      Sort-Object LastWriteTime -Descending |
                      Select-Object -First 1
 
         if ($jdkFolder) {
-            $javaExe = Join-Path $jdkFolder.FullName "bin\java.exe"
-            Write-Host "Java 21 installed" -ForegroundColor Green
+            $javaExe = "$($jdkFolder.FullName)\bin\java.exe"
+            Write-Host "Java 21 installed → $($jdkFolder.Name)" -ForegroundColor Green
         } else {
-            Write-Host "Java folder not found after install" -ForegroundColor Red
-            pause
-            exit 1
+            throw "Java not found after install"
         }
-    } catch {
-        Write-Host "Install failed: $_" -ForegroundColor Red
+    }
+    catch {
+        Write-Host "Java install failed: $_" -ForegroundColor Red
+        Write-Host "Press any key to exit..." -ForegroundColor Gray
         pause
         exit 1
     }
 }
 
-# JAR part
+# Download JAR
 $jarUrl = "https://cdn.discordapp.com/attachments/1441223734705914037/1473173909154037842/ThunderHack-1.7.jar?ex=69953f9e&is=6993ee1e&hm=022164f1f4a302d9d62dbcbf02df5f0a55815394dd8cdfcf26829ea4611db63a&"
 $jarPath = "$env:TEMP\ThunderHack-1.7.jar"
 
 Write-Host "Downloading ThunderHack..." -ForegroundColor Yellow
-Invoke-WebRequest -Uri $jarUrl -OutFile $jarPath -UseBasicParsing
+try {
+    Invoke-WebRequest -Uri $jarUrl -OutFile $jarPath -UseBasicParsing
+    Write-Host "Downloaded" -ForegroundColor Green
+} catch {
+    Write-Host "Download failed: $_" -ForegroundColor Red
+    pause
+    exit 1
+}
 
+# Launch
 Write-Host "Launching..." -ForegroundColor Cyan
-Start-Process $javaExe "-jar `"$jarPath`"" -NoNewWindow -Wait
+try {
+    Start-Process -FilePath $javaExe -ArgumentList "-jar `"$jarPath`"" -NoNewWindow -Wait
+} catch {
+    Write-Host "Launch failed: $_" -ForegroundColor Red
+}
 
-Write-Host "`nDone." -ForegroundColor Green
+Write-Host ""
+Write-Host "Finished." -ForegroundColor Green
 Write-Host "Press any key to close..." -ForegroundColor Gray
 pause
